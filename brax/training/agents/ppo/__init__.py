@@ -12,3 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# from brax.training.agents.ppo.losses import make_ppo_networks
+from brax.training.agents.ppo import losses
+from brax.training.agents.ppo import networks

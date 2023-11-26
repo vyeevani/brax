@@ -94,7 +94,9 @@ def make_policy_network(
       kernel_init=jax.nn.initializers.lecun_uniform())
 
   def apply(processor_params, policy_params, obs):
-    obs = preprocess_observations_fn(obs, processor_params)
+    if processor_params:
+      obs = preprocess_observations_fn(obs, processor_params)
+    
     return policy_module.apply(policy_params, obs)
 
   dummy_obs = jnp.zeros((1, obs_size))
@@ -115,7 +117,8 @@ def make_value_network(
       kernel_init=jax.nn.initializers.lecun_uniform())
 
   def apply(processor_params, policy_params, obs):
-    obs = preprocess_observations_fn(obs, processor_params)
+    if processor_params:
+      obs = preprocess_observations_fn(obs, processor_params)
     return jnp.squeeze(value_module.apply(policy_params, obs), axis=-1)
 
   dummy_obs = jnp.zeros((1, obs_size))

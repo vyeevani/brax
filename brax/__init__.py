@@ -20,3 +20,5 @@ from brax.base import Motion
 from brax.base import State
 from brax.base import System
 from brax.base import Transform
+import brax.envs as envs
+import brax.training as training

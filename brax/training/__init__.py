@@ -12,3 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import brax.training.types as types
+import brax.training.agents as agents
+import brax.training.gradients as gradients
