@@ -12,3 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import brax.training.acme.running_statistics as running_statistics
+import brax.training.acme.specs as specs

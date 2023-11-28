@@ -15,3 +15,4 @@
 import brax.training.types as types
 import brax.training.agents as agents
 import brax.training.gradients as gradients
+import brax.training.acme as acme

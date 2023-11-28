@@ -15,6 +15,7 @@ class PPOAgentState(typing.NamedTuple):
     pass
 
 class PPOPolicyState(typing.NamedTuple):
+    normalizer_fn_params: brax.training.acme.running_statistics.RunningStatisticsState
     policy_fn_params: brax.training.types.Params
     key: jax.Array
 
@@ -56,7 +57,7 @@ def make_policy(
         env_state.obs.shape[-1],
         env.action_size,
         # do nothing with this. Second argument is normalization params
-        preprocess_observations_fn=lambda observations, _: observations
+        preprocess_observations_fn=brax.training.acme.running_statistics.normalize
     )
     make_policy = brax.training.agents.ppo.networks.make_inference_fn(ppo_network)
 
@@ -93,15 +94,16 @@ def make_policy(
         )
 
     def policy_fn(
-        policy_state: algorithm.PolicyState,
+        policy_state: PPOPolicyState,
         world_state: algorithm.WorldState,
         key: jax.Array # we don't need the key here
     ) -> typing.Tuple[algorithm.WorldState, PPOAction]:
         # take an action using the key that we got for actions
         # we don't need the policy key here because we aren't
         # doing anything stochastic
-        policy_params, _ = policy_state
-        policy = make_policy((None, policy_params))
+        policy_params = policy_state.policy_fn_params
+        normalizer_params = policy_state.normalizer_fn_params
+        policy = make_policy((normalizer_params, policy_params))
         action, extras = policy(world_state.env_state.obs, key)
         next_env_state = env.step(world_state.env_state, action)
         next_actor_state = None  # this isn't using recurrent behavior so this isn't needed
@@ -118,10 +120,13 @@ def make_policy(
 
     def train_fn(
         training_state: algorithm.TrainingState,
-        policy_state: algorithm.PolicyState,
+        policy_state: PPOPolicyState,
         trajectories: typing.List[algorithm.Trajectory],
     ) -> typing.Tuple[algorithm.TrainingState, algorithm.PolicyState]:
-        policy_params, policy_key = policy_state
+        normalizer_params = policy_state.normalizer_fn_params
+        policy_params = policy_state.policy_fn_params
+        policy_key = policy_state.key
+
         next_policy_key, _ = jax.random.split(policy_key, 2)
         optimizer_state, value_params, training_key, = training_state
         next_training_key, loss_key, shuffle_key = jax.random.split(training_key, 3)
@@ -163,7 +168,7 @@ def make_policy(
                     policy=policy_params,
                     value=value_params
                 ),
-                None,  # There's no normalizer so this is not needed here
+                normalizer_params,
                 batch,
                 loss_key,
                 optimizer_state=optimizer_state
@@ -173,13 +178,18 @@ def make_policy(
         episode_mean_reward = jax.numpy.mean(trajectories.current_world_state.env_state.reward)
         episode_mean_length = jax.numpy.mean(trajectories.current_world_state.env_state.done.shape[-1] / jax.numpy.sum(trajectories.current_world_state.env_state.done, axis=-1))
         
-        jax.debug.print("======== Episode Stats ========")
-        jax.debug.print("Episode mean length {episode_mean_length}", episode_mean_length=episode_mean_length)
-        jax.debug.print("Episode mean reward {episode_mean_reward}", episode_mean_reward=episode_mean_reward)
+        jax.debug.print("======== Episode Stats ========", ordered=True)
+        jax.debug.print("Episode mean length {episode_mean_length}", episode_mean_length=episode_mean_length, ordered=True)
+        jax.debug.print("Episode mean reward {episode_mean_reward}", episode_mean_reward=episode_mean_reward, ordered=True)
         
         shuffled_trajectories = jax.tree_map(shuffle, trajectories)
         batched_shuffled_trajectories = jax.tree_map(batch, shuffled_trajectories)
         brax_transitions = brax_transition(batched_shuffled_trajectories)
+
+        next_normalizer_params = brax.training.acme.running_statistics.update(
+            normalizer_params,
+            brax_transitions.observation
+        )
 
         (next_optimizer_state, next_policy_params, next_value_params), metrics = jax.lax.scan( # omitted return is metrics_list
             update, (optimizer_state, policy_params, value_params), brax_transitions)
@@ -189,31 +199,38 @@ def make_policy(
             key=next_training_key,
         )
         next_policy_state = PPOPolicyState(
+            normalizer_fn_params=next_normalizer_params,
             policy_fn_params=next_policy_params,
             key=next_policy_key
         )
 
-        jax.debug.print("======== Loss metrics ========")
+        jax.debug.print("======== Loss metrics ========", ordered=True)
         metrics_mean = jax.tree_map(lambda field: jax.numpy.mean(field), metrics)
-        jax.debug.callback(print_tree, metrics_mean)
+        jax.debug.callback(print_tree, metrics_mean, ordered=True)
 
         return (next_training_state, next_policy_state)
     
     algorithm_key, policy_init_key, value_init_key, train_apply_key, policy_apply_key = jax.random.split(key, 5)
+    initial_normalizer_params = brax.training.acme.running_statistics.init_state(
+        brax.training.acme.specs.Array(env_state.obs.shape[-1:], jax.numpy.dtype('float32')),
+    )
     initial_policy_params = ppo_network.policy_network.init(policy_init_key)
     initial_value_params = ppo_network.value_network.init(value_init_key)
 
-    initial_params = brax.training.agents.ppo.losses.PPONetworkParams(
-        policy=initial_policy_params,
-        value=initial_value_params,
+    initial_optimizer_params = optimizer.init(
+        brax.training.agents.ppo.losses.PPONetworkParams(
+            policy=initial_policy_params,
+            value=initial_value_params,
+        )
     )
     initial_algorithm_state = algorithm.AlgorithmState(
         training_state=PPOTrainingState(
-            optimizer_params=optimizer.init(initial_params),
+            optimizer_params=initial_optimizer_params,
             value_fn_params=initial_value_params,
             key=train_apply_key
         ),
         policy_state=PPOPolicyState(
+            normalizer_fn_params=initial_normalizer_params,
             policy_fn_params=initial_policy_params,
             key=policy_apply_key,
         ),
